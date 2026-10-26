@@ -4,15 +4,16 @@ import argparse
 import json
 import os
 import pickle
+import subprocess
 import torch
 import pandas as pd
 import numpy as np
-import xarray as xr
 from sklearn.preprocessing import RobustScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from process_data import  get_data
 from pipeline import Pipeline, setup, end
+
 
 def normalizer_paths(args):
     if args.normalizer_path:
@@ -115,6 +116,15 @@ def month_key(year, month):
     return int(year) * 12 + int(month)
 
 
+def month_from_key(key):
+    """Convert the integer month key used by :func:`month_key` back to Y/M."""
+    year, month = divmod(int(key), 12)
+    if month == 0:
+        year -= 1
+        month = 12
+    return year, month
+
+
 def iter_months(start_year, start_month, end_year, end_month):
     cur = month_key(start_year, start_month)
     end_key = month_key(end_year, end_month)
@@ -138,6 +148,124 @@ def validate_month_range(start_year, start_month, end_year, end_month, label):
             f'{label} start {start_year}-{start_month:02d} is after '
             f'end {end_year}-{end_month:02d}'
         )
+
+
+def initialize_outputs_from_historical(rank, args):
+    """Clone historical CSVs and remove rows at/after the recursive start year.
+
+    With --historical_result_dir, the output CSVs start as copies of the one-step
+    (non-recursive) result files of the same experiment, cut just before
+    --start_year, and the recursive months are appended to them. The copy uses
+    GNU cp/grep, as on the Linux systems the code was run on.
+    """
+    if not args.historical_result_dir:
+        return
+
+    if rank == 0:
+        os.makedirs(args.result_dir, exist_ok=True)
+        suffixes = ['', '_0', '_1', '_2', '_3', '_4']
+        for suffix in suffixes:
+            source = os.path.join(
+                args.historical_result_dir, f'{args.exp_id}{suffix}.csv'
+            )
+            destination = os.path.join(args.result_dir, f'{args.exp_id}{suffix}.csv')
+            if not os.path.exists(source):
+                raise FileNotFoundError(f'historical result not found: {source}')
+
+            # A reflink makes this nearly instantaneous on filesystems that
+            # support copy-on-write and safely falls back to a normal copy.
+            subprocess.run(
+                ['cp', '--reflink=auto', '--', source, destination],
+                check=True,
+            )
+            match = subprocess.run(
+                [
+                    'grep', '-E', '-b', '-m', '1',
+                    f'^{args.start_year}(\\.0)?,',
+                    destination,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if match.returncode == 0:
+                byte_offset = int(match.stdout.split(':', 1)[0])
+                os.truncate(destination, byte_offset)
+                print(
+                    f'initialized {destination} from {source}; '
+                    f'truncated before {args.start_year} at byte {byte_offset}'
+                )
+            elif match.returncode == 1:
+                # Training-time result files commonly end at the year just
+                # before recursive prediction begins.  In that valid case
+                # there is nothing to truncate.
+                with open(destination, 'rb') as f:
+                    f.seek(0, os.SEEK_END)
+                    pos = f.tell() - 1
+                    while pos >= 0:
+                        f.seek(pos)
+                        if f.read(1) not in (b'\n', b'\r'):
+                            break
+                        pos -= 1
+                    end_pos = pos
+                    while pos >= 0:
+                        f.seek(pos)
+                        if f.read(1) == b'\n':
+                            break
+                        pos -= 1
+                    f.seek(pos + 1)
+                    last_line = f.read(end_pos - pos).decode('utf-8').strip()
+                last_year = int(float(last_line.split(',', 1)[0]))
+                if last_year >= args.start_year:
+                    raise ValueError(
+                        f'Could not locate year {args.start_year} in {destination}; '
+                        f'last observed year is {last_year}'
+                    )
+                print(
+                    f'initialized {destination} from {source}; historical '
+                    f'file already ends at {last_year}, so no truncation was needed'
+                )
+            else:
+                raise RuntimeError(
+                    f'grep failed while preparing {destination}: {match.stderr}'
+                )
+
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+
+
+def apply_source_missing_mask(result, source_month, year, month):
+    """Apply only the source target's missingness mask, aligned by coordinates."""
+    frame = result.reset_index() if isinstance(result.index, pd.MultiIndex) else result.copy()
+    frame = frame.merge(
+        source_month,
+        on=['lat', 'lon'],
+        how='left',
+        sort=False,
+        validate='one_to_one',
+    )
+    if frame['_target_is_nan'].isna().any():
+        missing = int(frame['_target_is_nan'].isna().sum())
+        raise ValueError(
+            f'Could not align {missing} mask coordinates for {year}-{month:02d}'
+        )
+    frame.loc[frame['_target_is_nan'], 'predictions'] = np.nan
+    return frame.drop(columns=['_target_is_nan'])
+
+
+def append_month_outputs(rank, args, mean_result, fold_results, first_month):
+    if rank != 0:
+        return
+    # Without --historical_result_dir, new files (with a header) are started at
+    # the first prediction month; otherwise rows are appended to the copies.
+    fresh = first_month and not args.historical_result_dir
+    mode, header = ('w', True) if fresh else ('a', False)
+    os.makedirs(args.result_dir, exist_ok=True)
+    for fold_index, fold_result in enumerate(fold_results):
+        path = os.path.join(args.result_dir, f'{args.exp_id}_{fold_index}.csv')
+        fold_result.to_csv(path, mode=mode, header=header, index=False)
+    mean_path = os.path.join(args.result_dir, f'{args.exp_id}.csv')
+    mean_result.to_csv(mean_path, mode=mode, header=header, index=False)
 
 
 def load_warm_start_predictions(csv_path, args):
@@ -252,20 +380,23 @@ def main(rank, world_size):
     parser.add_argument('--result_dir', type=str, help='result dir', default='./result/')
     parser.add_argument('--preprocessed_data_dir', type=str, help='preprocessed_data_dir', default='./data/')
     parser.add_argument('--pft_data_dir', type=str, help='pft_data_dir', default='./data/PFT/')
+    parser.add_argument('--pft_freeze_year', type=int, default=0,
+                        help='hold PFT fractions at this year for all later years (0 = off)')
+    parser.add_argument('--mask_year', type=int, default=0,
+                        help='months after this year use the missing-data mask of the same month of this year '
+                             '(needed when the target has no values in the prediction year; 0 = off)')
     parser.add_argument('--data_name', type=str, help='data name', default='2026_5')
-    parser.add_argument('--dgvm_path', type=str, help='dgvm_path', default='./data/Trendyv14_S2_nbp.nc')
-    parser.add_argument('--dgvm_average_path', '--dgvm_mean_path', dest='dgvm_average_path', type=str, help='dgvm_average_path', default='./data/average_nbp.nc')
     parser.add_argument('--start_year', type=int, help='start year', default=2025)
     parser.add_argument('--start_month', type=int, help='start month', default=1)
     parser.add_argument('--end_year', type=int, help='end year', default=2026)
     parser.add_argument('--end_month', type=int, help='end month', default=3)
-    parser.add_argument('--test_start_year', type=int, help='test dataloader start year', default=2000)
-    parser.add_argument('--test_end_year', type=int, help='test dataloader end year; defaults to end_year', default=None)
     parser.add_argument('--normalizer_mode', type=str, choices=['auto', 'load', 'off'], default='auto')
     parser.add_argument('--normalizer_dir', type=str, default='./normalizers')
     parser.add_argument('--normalizer_path', type=str, default='')
     parser.add_argument('--normalizer_start_year', type=int, default=2000)
     parser.add_argument('--normalizer_end_year', type=int, default=2024)
+    parser.add_argument('--historical_result_dir', type=str, default='',
+                        help='one-step result directory whose CSVs are copied and continued (optional)')
     parser.add_argument('--warm_start_result_dir', type=str, default='')
     parser.add_argument('--warm_start_start_year', type=int, default=2025)
     parser.add_argument('--warm_start_start_month', type=int, default=1)
@@ -291,26 +422,18 @@ def main(rank, world_size):
     data = get_data(mode=args.data_name, config=mt.config)
     prepare_fixed_normalizer(rank, args, mt, data)
     apply_warm_start_predictions(rank, args, data)
+    initialize_outputs_from_historical(rank, args)
     
     mt.config['input_dim'] = data.shape[1] - 1
     print('input_dim', mt.config['input_dim'])
-    if target == 'average_nbp':
-        dgvm_path =  args.dgvm_average_path
-        pro_data = xr.open_dataset(dgvm_path)
-        last_12_months_nan = np.isnan(pro_data['nbp'][-12:,:,:].values)
-    else:
-        dgvm_path = args.dgvm_path
-    
-        pro_data = xr.open_dataset(dgvm_path)
+    # The land mask is taken from the target column already present in the
+    # evaluation feather, month by month.  Only missingness is read; target
+    # values are never used as model input for the prediction month.
 
-        for idx, nbp_name in enumerate(pro_data['DGVM'][:].values):
-            if nbp_name not in target:
-                continue
-            print(idx, nbp_name)
-            last_12_months_nan = np.isnan(pro_data['nbp'][idx][-12:,:,:].values)
-
-
-    model_paths = glob.glob(mt.config['dump_dir'] + f'/*{mt.config["exp_id"]}/*/finish_*')
+    model_paths = sorted(
+        glob.glob(mt.config['dump_dir'] + f'/*{mt.config["exp_id"]}/*/finish_*'),
+        key=lambda path: int(os.path.basename(os.path.dirname(path))),
+    )
     print(model_paths)
     model_class = importlib.import_module(
         f'model.{mt.config["model"]}'
@@ -327,30 +450,108 @@ def main(rank, world_size):
         last_month = args.end_month if year == args.end_year else 12
         for month in range(first_month, last_month + 1):
             print(year, month)
-            test_start_year = args.test_start_year
-            test_end_year = args.test_end_year if args.test_end_year is not None else args.end_year
+            # Build a loader only for the 13-month window ending at this
+            # prediction month.
+            target_key = month_key(year, month)
+            history_start_year, history_start_month = month_from_key(
+                target_key - (mt.config['window'] - 1)
+            )
+            history_start_key = month_key(history_start_year, history_start_month)
+            data_keys = data['year'].astype(np.int32) * 12 + data['month'].astype(np.int32)
+            month_data = data.loc[
+                (data_keys >= history_start_key) & (data_keys <= target_key)
+            ].copy()
+            expected_rows = 360 * 720 * mt.config['window']
+            if month_data.shape[0] != expected_rows:
+                raise ValueError(
+                    f'Incomplete evaluation window for {year}-{month:02d}: '
+                    f'{history_start_year}-{history_start_month:02d}..{year}-{month:02d} '
+                    f'has {month_data.shape[0]} rows, expected {expected_rows}'
+                )
+            print(
+                f'evaluation window: {history_start_year}-{history_start_month:02d}..'
+                f'{year}-{month:02d} ({month_data.shape[0]} rows)'
+            )
             mt.test_loader = mt.build_dataloader_all_indexes(
-                data,
+                month_data,
                 'valid',
-                test_start_year,
-                test_end_year,
+                history_start_year,
+                year,
                 shuffle=False,
                 world_size=world_size,
             )
 
-            if year==args.end_year and month == args.end_month:
-                result = mt.kfold_test()
-                break
-            else:
-                result = mt.kfold_test(save_file=False)
+            # Get all five fold results for this month so that complete fold
+            # and ensemble CSVs can be written.
+            result, fold_results = mt.kfold_test(
+                save_file=False,
+                return_fold_results=True,
+            )
             result = result.reset_index()
-            cur_res = result[(result.year==year) & (result.month==month)]
-            nan_mask = last_12_months_nan[month-1].flatten()
-            cur_res.loc[nan_mask, 'predictions'] = np.nan
+            cur_res = result[(result.year == year) & (result.month == month)].copy()
 
-            # renew data
-            idx = data[(data.year==year) & (data.month==month)].index
-            data.loc[idx, mt.config['target']] = cur_res.predictions.values * 1e-10
+            # Preserve the original target's land/missing-data mask without
+            # reading any true target values.  Join by coordinates so masking
+            # and recursive updates do not depend on incidental row order.
+            # In a year without target values (2024 in the paper's second
+            # experiment) every prediction would be masked to NaN and the NaN fed
+            # back as history. With --mask_year Y, months after Y use the
+            # missing-data mask of the same month of Y.
+            mask_year = args.mask_year if (args.mask_year and year > args.mask_year) else year
+            source_month = data.loc[
+                (data.year == mask_year) & (data.month == month),
+                ['latitude', 'longitude', mt.config['target']],
+            ].copy()
+            source_month = source_month.rename(
+                columns={'latitude': 'lat', 'longitude': 'lon'}
+            )
+            source_month['_target_is_nan'] = source_month[mt.config['target']].isna()
+            source_month = source_month[['lat', 'lon', '_target_is_nan']]
+            if source_month.duplicated(['lat', 'lon']).any():
+                raise ValueError(f'Duplicate source coordinates for {year}-{month:02d}')
+
+            cur_res = apply_source_missing_mask(
+                cur_res, source_month, year, month
+            )
+            masked_folds = []
+            for fold_result in fold_results:
+                fold_month = fold_result.reset_index()
+                fold_month = fold_month[
+                    (fold_month.year == year) & (fold_month.month == month)
+                ].copy()
+                masked_folds.append(
+                    apply_source_missing_mask(
+                        fold_month, source_month, year, month
+                    )
+                )
+            append_month_outputs(
+                rank, args, cur_res, masked_folds,
+                first_month=(year == args.start_year and month == args.start_month),
+            )
+
+            # Feed this prediction back as history for the next month.  This is
+            # the only recursive target update; no target values from the
+            # prediction period are inserted into history.
+            base = data.loc[
+                (data.year == year) & (data.month == month),
+                ['latitude', 'longitude'],
+            ].reset_index()
+            update = base.merge(
+                cur_res[['lat', 'lon', 'predictions']],
+                left_on=['latitude', 'longitude'],
+                right_on=['lat', 'lon'],
+                how='left',
+                sort=False,
+                validate='one_to_one',
+            )
+            if update['predictions'].isna().sum() != cur_res['predictions'].isna().sum():
+                raise ValueError(
+                    f'Prediction-coordinate alignment changed the NaN count for '
+                    f'{year}-{month:02d}'
+                )
+            data.loc[
+                update['index'].to_numpy(), mt.config['target']
+            ] = update['predictions'].to_numpy() * 1e-10
             
 
     print('iterative prediction finished!')
@@ -367,3 +568,4 @@ if __name__ == '__main__':
     print('world_size2:', world_size)
     rank = int(os.environ['RANK'])
     main(rank, world_size)
+
