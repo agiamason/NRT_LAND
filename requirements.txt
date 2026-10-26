@@ -1,0 +1,9 @@
+scikit-learn
+numpy
+pandas
+tqdm
+einops
+pyarrow
+netcdf4
+h5netcdf
+xarray
