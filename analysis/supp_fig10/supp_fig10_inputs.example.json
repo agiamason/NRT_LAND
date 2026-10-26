@@ -1,0 +1,16 @@
+{
+  "cru_ts_pre": "data/analysis/cru_ts4.08.1901.2023.pre.dat.nc.gz",
+  "era5": "data/analysis/ERA5.nc",
+  "trendy": {
+    "v11 LPX-Bern fFire": "data/trendy/v11/LPX-Bern_S2_fFire.nc",
+    "v11 LPJ fFire": "data/trendy/v11/LPJ_S2_fFire.nc",
+    "v12 LPX-Bern fFire": "data/trendy/v12/LPX-Bern_S2_fFire.nc",
+    "v12 LPJwsl fFire": "data/trendy/v12/LPJwsl_S2_fFire.nc",
+    "v13 LPX-Bern fFire": "data/trendy/v13/LPX-Bern_S2_fFire.nc",
+    "v13 LPJwsl fFire": "data/trendy/v13/LPJwsl_S2_fFire.nc",
+    "v13 LPX-Bern cVeg": "data/trendy/v13/LPX-Bern_S2_cVeg.nc",
+    "v13 LPJwsl cVeg": "data/trendy/v13/LPJwsl_S2_cVeg.nc",
+    "v14 LPX-Bern cVeg": "data/trendy/v14/LPX-Bern_S2_cVeg.nc",
+    "v14 LPJ-EOSIM cVeg": "data/trendy/v14/LPJ-EOSIM_S2_cVeg.nc"
+  }
+}
