@@ -6,10 +6,11 @@ vegetation information, and a target land-flux field, then predicts future
 months recursively by feeding each predicted target back as history for the
 next month.
 
-This repository is the minimal runnable package for training and recursive
-evaluation. It contains the model definitions, data loader, training and
-evaluation entry points, and example launchers. It does **not** contain raw
-data, PFT files, checkpoints, generated results, notebooks, or credentials.
+This repository contains the model, the training and evaluation code and
+their launchers, and the code used for the paper: the emulator runs
+([Reproducing the paper](#reproducing-the-paper)), the analysis behind the
+figures and tables (`analysis/`) and the construction of the input tables
+(`preprocessing/`). It does **not** contain data, checkpoints or results.
 
 ## Contents
 
@@ -20,7 +21,9 @@ data, PFT files, checkpoints, generated results, notebooks, or credentials.
 - [Data format](#data-format)
 - [Quick start](#quick-start)
 - [Training](#training)
+- [One-step prediction](#one-step-prediction)
 - [Recursive evaluation](#recursive-evaluation)
+- [Reproducing the paper](#reproducing-the-paper)
 - [Outputs and checkpoint layout](#outputs-and-checkpoint-layout)
 - [Troubleshooting](#troubleshooting)
 - [Repository layout](#repository-layout)
@@ -41,8 +44,15 @@ period are replaced month by month with the model prediction. The next month
 therefore uses the preceding prediction as history. Target observations from
 the prediction period are not used as input history.
 
-The current recursive evaluator uses a CNN with a 13-month input window and
-loads all completed fold checkpoints for the selected experiment.
+The evaluators use a CNN with a 13-month input window and 18 x 18 patches and
+load the five fold checkpoints of the selected experiment; the prediction is the
+mean of the five folds.
+
+Note on the learning rate: `run_epoch()` never calls `scheduler.step()`, so the
+learning rate stays at the start value of the warm-up scheduler,
+0.01 x 3.2e-3 = 3.2e-5 (AdamW, weight decay 1e-3), for the whole training. The
+published checkpoints were trained this way, and the code is kept unchanged so
+that retraining reproduces them.
 
 ## Requirements
 
@@ -89,8 +99,7 @@ PY
 
 The repository expects **preprocessed Feather files**. Raw NetCDF, CSV, and
 PFT source files must be converted before they are passed to the launchers;
-the conversion scripts are intentionally kept outside this minimal public
-package because they are specific to each data release.
+see `preprocessing/` for the scripts that build them.
 
 Use this directory layout (the names can be changed through the launcher
 variables described below):
@@ -99,8 +108,6 @@ variables described below):
 NRT_LAND/
 ├── data/
 │   ├── data25_0616.feather       # --data_name data25_0616
-│   ├── Trendyv14_S2_nbp.nc       # DGVM masks for recursive evaluation
-│   ├── average_nbp.nc            # optional average target mask
 │   └── PFT/
 │       ├── ORCHIDEE_nbp.feather
 │       ├── CABLE-POP_nbp.feather
@@ -181,8 +188,9 @@ print(df[["year", "month", "latitude", "longitude"]].head())
 If PFT features are used, create one file per target at
 `$PFT_DIR/<TARGET>.feather`. The file must:
 
-- have exactly the same number of rows as the main Feather table;
-- use the same row order as the main table before preprocessing; and
+- have one row per row of the main table with `year >= 2000`, in the same
+  order, with the same `year`, `month`, `latitude` and `longitude` values (the
+  loader checks this; extra rows at the end are dropped);
 - contain feature columns whose names include `PFT` (for example `PFT_1`,
   `PFT_2`, ...).
 
@@ -192,14 +200,14 @@ copies all columns containing `PFT` into the main table. A missing PFT file is a
 the loader, but a checkpoint trained with PFT features will not be compatible
 with a run that omits them.
 
-### Evaluation NetCDF files
+### Missing-data mask of the predictions
 
-Recursive evaluation also reads the DGVM reference file supplied by
-`--dgvm_path` (default `data/Trendyv14_S2_nbp.nc`). It expects an `nbp`
-data variable and a `DGVM` coordinate/value list containing the selected target
-name. For the special target `average_nbp`, the evaluator uses
-`--dgvm_average_path` (default `data/average_nbp.nc`). These files are used to
-identify invalid target cells and are separate from the Feather training table.
+The recursive evaluator sets predictions to NaN where the target column of the
+main table is missing in the same month (only the missingness is read, never the
+target values). In a prediction year without target values, pass
+`--mask_year` (`MASK_YEAR`): months after that year use the mask of the same
+month of that year. `--pft_freeze_year` (`PFT_FREEZE_YEAR`) holds the PFT
+fractions of later years at that year.
 
 ### Units and normalization
 
@@ -224,38 +232,57 @@ END_YEAR=2023 END_MONTH=12 \
 bash scripts/evaluate.sh
 ```
 
-The final result is written to `result/101.csv`. The evaluator creates a
-normalizer in `normalizers/` if one does not already exist. The first run can
-be slow because every requested month is evaluated sequentially.
+The result is written to `result/101.csv` (mean of the five folds) and
+`result/101_<fold>.csv`. The evaluator creates a normalizer in `normalizers/` if
+one does not already exist; use the training years of the checkpoint
+(`NORMALIZER_START_YEAR`, `NORMALIZER_END_YEAR`).
 
 ## Training
 
-Train a five-fold model with the 13-month context expected by the recursive
-evaluator:
+Train a five-fold model (13-month window and 18 x 18 patches, the launcher
+defaults) on the years `KFOLD_START_YEAR`-`KFOLD_END_YEAR`:
 
 ```bash
 GPUS=1 \
 TARGET=ORCHIDEE_nbp \
 EXP_ID=101 \
 DATA_NAME=data25_0616 \
-MODEL=cnn WINDOW=13 \
+KFOLD_START_YEAR=2000 KFOLD_END_YEAR=2021 \
 bash scripts/train.sh
 ```
 
-For multiple GPUs, set `GPUS` to the number of visible GPUs:
+For multiple GPUs, set `GPUS` to the number of visible GPUs (the paper used
+four GPUs with 128 samples per GPU):
 
 ```bash
-GPUS=4 TARGET=ORCHIDEE_nbp EXP_ID=101 WINDOW=13 bash scripts/train.sh
+GPUS=4 TARGET=ORCHIDEE_nbp EXP_ID=101 KFOLD_END_YEAR=2021 bash scripts/train.sh
 ```
 
-Training uses five folds by default. Each fold writes a completed checkpoint
-under `checkpoint/<EXP_ID>/<fold>/finish_*.pth`.
+Each fold writes a completed checkpoint under
+`checkpoint/<EXP_ID>/<fold>/finish_*.pth`. When several runs share a machine,
+give each a different `MASTER_PORT`.
+
+## One-step prediction
+
+`scripts/onestep.sh` (`kfold_prediction_fixed_scaler.py`) predicts every month
+from `START_YEAR` to `END_YEAR` (default 2010-2023) from the target history in
+the main table, with the normalizer fitted on the training years
+(`NORMALIZER_START_YEAR`-`NORMALIZER_END_YEAR`, default 2000-2021):
+
+```bash
+TARGET=ORCHIDEE_nbp EXP_ID=101 RESULT_DIR=result/exp1_onestep bash scripts/onestep.sh
+```
+
+Its CSVs are also the history files of the recursive evaluation (`HISTORY_DIR`).
 
 ## Recursive evaluation
 
-The supplied evaluator loads every `finish_*.pth` file under the selected
-experiment, predicts each month in chronological order, and writes the final
-ensemble result at the last requested month. The standard launcher exposes:
+The evaluator loads every `finish_*.pth` file under the selected experiment and
+predicts each month in chronological order from the 13 months ending at that
+month; the prediction replaces the target value, so the next month uses it as
+history. Each month is appended to `<EXP_ID>.csv` and `<EXP_ID>_<fold>.csv`.
+With `HISTORY_DIR`, these files start as copies of the one-step files of the
+same experiment, cut just before `START_YEAR`. The launcher exposes:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -267,25 +294,43 @@ ensemble result at the last requested month. The standard launcher exposes:
 | `END_YEAR` | `2023` | Last prediction year |
 | `END_MONTH` | `12` | Last prediction month |
 | `GPUS` | `1` | Number of processes/GPU devices |
-| `DATA_DIR` | `./data` | Directory containing Feather and NetCDF inputs |
+| `DATA_DIR` | `./data` | Directory containing the Feather inputs |
 | `PFT_DIR` | `$DATA_DIR/PFT` | Directory containing target PFT Feather files |
 | `CHECKPOINT_DIR` | `./checkpoint` | Root checkpoint directory |
 | `RESULT_DIR` | `./result` | Result output directory |
 | `NORMALIZER_DIR` | `./normalizers` | Saved normalizer directory |
+| `NORMALIZER_MODE` | `auto` | `auto` fits a missing normalizer, `load` requires it |
+| `NORMALIZER_START_YEAR`, `NORMALIZER_END_YEAR` | `2000`, `2021` | Normalizer fit years (the training years) |
+| `HISTORY_DIR` | empty | One-step result directory continued by this run |
+| `MASK_YEAR` | `0` (off) | Missing-data mask year for years without targets |
+| `PFT_FREEZE_YEAR` | `0` (off) | Year at which the PFT fractions are held fixed |
+| `MASTER_PORT` | `29500` | torchrun port; use a different one per concurrent run |
 
-For a fixed normalizer range or a custom DGVM file, call
-`multi_prediction_evaluation.py` directly and add its corresponding
-`--normalizer_*` or `--dgvm_*` arguments. For example:
+## Reproducing the paper
+
+The paper evaluates emulators of the 19 TRENDY v13 S2 models (experiment ids
+101-119, see `scripts/reproduce_paper.sh`) in two experiments:
+
+| | Training years | One-step | Recursive | Other settings |
+| --- | --- | --- | --- | --- |
+| `exp1` | 2000-2021 | 2010-2023 | 2022-01 to 2023-12 | |
+| `exp2` | 2000-2023 | 2010-2023 | 2024-01 to 2024-12 | `PFT_FREEZE_YEAR=2023`, `MASK_YEAR=2023` |
+
+Inputs: `data/data25_0616.feather` (main table) and the PFT tables of the 12
+models with land-cover input (`preprocessing/build_pft_feather.py`). With the
+checkpoints of an experiment in `CHECKPOINT_DIR`:
 
 ```bash
-torchrun --nproc-per-node=1 multi_prediction_evaluation.py \
-  --target ORCHIDEE_nbp --exp_id 101 \
-  --data_name data25_0616 \
-  --start_year 2022 --start_month 1 \
-  --end_year 2023 --end_month 12 \
-  --normalizer_start_year 2000 \
-  --normalizer_end_year 2021
+# training (4 GPUs in the paper), one-step and recursive prediction
+GPUS=4 CHECKPOINT_DIR=checkpoint/exp1 bash scripts/reproduce_paper.sh exp1 train onestep recursive
+GPUS=4 CHECKPOINT_DIR=checkpoint/exp2 bash scripts/reproduce_paper.sh exp2 train onestep recursive
 ```
+
+Without the `train` stage, the script runs the one-step and recursive
+predictions from existing checkpoints. Results are written to
+`result/<exp>_onestep/` and `result/<exp>_recursive/`. The figures, tables and
+numbers of the paper are then produced by `analysis/` (see
+[analysis/README.md](analysis/README.md)).
 
 ## Outputs and checkpoint layout
 
@@ -303,7 +348,8 @@ normalizers/
 └── normalizer_land_<TARGET>_<DATA_NAME>_<start>_<end>.json
 
 result/
-└── <EXP_ID>.csv
+├── <EXP_ID>.csv
+└── <EXP_ID>_<fold>.csv
 ```
 
 Result CSV files contain the prediction coordinates and the model output. Do
@@ -312,11 +358,11 @@ public repository.
 
 ## Troubleshooting
 
-### `PFT data length should equal to data length`
+### `PFT data is shorter than the selected data` or `PFT rows are not aligned`
 
-The PFT file does not have the same number of rows as the main Feather table.
-Regenerate it from the same grid and time range, and verify that its row order
-matches the main table.
+The PFT file does not have one row per row of the main table with
+`year >= 2000`, in the same order. Regenerate it from the same main table
+(`preprocessing/build_pft_feather.py`).
 
 ### `Missing normalizer` or a normalizer mismatch
 
@@ -338,17 +384,18 @@ number of visible devices.
 ## Repository layout
 
 ```text
-model/                         Neural-network definitions
-process_data.py                Feather loading and sample construction
-data_utils.py                  Dataset utilities kept for compatibility
-pipeline.py                    Training and non-recursive evaluation entry point
-multi_prediction_evaluation.py Recursive month-by-month evaluation
-scripts/train.sh               Training launcher
-scripts/evaluate.sh            Recursive evaluation launcher
-install_dep_pkgs.sh            PyTorch and dependency installation
-requirements.txt               Python dependencies other than PyTorch
+model/                           Neural-network definitions
+process_data.py                  Feather loading and sample construction
+data_utils.py                    Dataset utilities kept for compatibility
+pipeline.py                      Training and non-recursive evaluation entry point
+kfold_prediction_fixed_scaler.py One-step prediction with a fixed normalizer
+multi_prediction_evaluation.py   Recursive month-by-month evaluation
+scripts/train.sh                 Training launcher
+scripts/onestep.sh               One-step prediction launcher
+scripts/evaluate.sh              Recursive evaluation launcher
+scripts/reproduce_paper.sh       The paper's two experiments for the 19 models
+preprocessing/                   Construction of the input tables
+analysis/                        Figures, tables and numbers of the paper
+install_dep_pkgs.sh              PyTorch and dependency installation
+requirements.txt                 Python dependencies other than PyTorch
 ```
-
-The public package is intentionally small. Data conversion, cluster job
-templates, experiment-specific configuration, and private source files should
-remain in the corresponding internal project.

@@ -80,11 +80,51 @@ def get_data(mode, config):
     if os.path.exists(pft_path):
         pft = feather.read_feather(pft_path, memory_map=True)
         pft = optimize_floats(pft)
-        assert pft.shape[0] == data.shape[0], 'PFT data length should equal to data length'
+        if pft.shape[0] < data.shape[0]:
+            raise ValueError(
+                f'PFT data is shorter than the selected data: '
+                f'{pft.shape[0]} < {data.shape[0]}'
+            )
+        if pft.shape[0] > data.shape[0]:
+            # A PFT file may contain months beyond the end of the main table.
+            # Rows are matched by position, so keep only the matching prefix.
+            pft = pft.iloc[:data.shape[0]].reset_index(drop=True)
+        if not pft[['year', 'month', 'latitude', 'longitude']].equals(
+            data[['year', 'month', 'latitude', 'longitude']].reset_index(drop=True)
+        ):
+            raise ValueError('PFT rows are not aligned with the selected data rows')
         
         for col in pft.columns:
             if 'PFT' in col:
                 data[col] = pft[col].values
+
+        # Optionally hold the PFT fractions fixed at one year for all later years
+        # (the paper uses --pft_freeze_year 2023 for the 2024 prediction).
+        freeze_year = int(config.get('pft_freeze_year', 0) or 0)
+        if freeze_year:
+            pft_columns = [col for col in data.columns if 'PFT' in col]
+            source_mask = data['year'] == freeze_year
+            source_values = data.loc[source_mask, pft_columns].to_numpy(copy=True)
+            if source_values.size == 0:
+                raise ValueError(f'No PFT rows found for freeze year {freeze_year}')
+            freeze_end_year = int(config.get('end_year', data['year'].max()))
+            future_years = data.loc[
+                (data['year'] > freeze_year) & (data['year'] <= freeze_end_year),
+                'year',
+            ].unique()
+            for future_year in sorted(future_years):
+                future_mask = data['year'] == future_year
+                future_rows = int(future_mask.sum())
+                if future_rows != source_values.shape[0]:
+                    raise ValueError(
+                        f'Cannot freeze PFT {freeze_year} -> {future_year}: '
+                        f'{source_values.shape[0]} source rows vs {future_rows} destination rows'
+                    )
+                data.loc[future_mask, pft_columns] = source_values
+            print(
+                f'froze {len(pft_columns)} PFT columns at {freeze_year} '
+                f'for years after {freeze_year}'
+            )
     target_col = data.pop(config['target'])
     data[config['target']] = target_col
     print(f"data.columns: {data.columns}")

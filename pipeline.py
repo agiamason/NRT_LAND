@@ -162,10 +162,12 @@ class Pipeline():
         indexes = self.create_indexes(data, self.config['window'], self.config['patch'], self.config['patch'])
         dataset = OceanDataset_V2(data, indexes, self.config, mode)
         sampler = DistributedSampler(dataset, num_replicas=world_size, rank=self.rank, drop_last=False, shuffle=shuffle) 
+        num_workers = int(self.config.get('num_workers', 0))
         dataloader = DataLoader(
             dataset, self.config['batch_size'],
             sampler=sampler,
-            num_workers=0
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
         )
         return dataloader
 
@@ -288,6 +290,11 @@ class Pipeline():
 
         
         optimizer = optim.AdamW(model.parameters(), lr=self.config['lr'], weight_decay=self.config['weight_decay'])
+
+        # Note on the learning rate: run_epoch() receives a scheduler but never calls scheduler.step().
+        # Building WarmUpLR sets the learning rate to its start value, 0.01 * lr = 3.2e-5, and it stays
+        # there, so the published emulators were trained with a constant learning rate of 3.2e-5 (AdamW,
+        # weight decay 1e-3). The code is left unchanged so that retraining reproduces those checkpoints.
 
         warmup_epochs = 5
         # Warm-up scheduler
@@ -448,10 +455,11 @@ class Pipeline():
     def plot_prediction():
         pass
 
-    def kfold_test(self, save_file=True):
+    def kfold_test(self, save_file=True, return_fold_results=False):
         print('kfold test start...')
         
         total_result = pd.DataFrame()
+        fold_results = []
         for i in range(self.config['kfold']):
             model = self.models[i]
             if type(model) != DDP:
@@ -511,6 +519,8 @@ class Pipeline():
             if save_file and self.rank == 0:
                 result.to_csv(
                     f'{self.config["result_dir"]}/{self.config["exp_id"]}_{i}.csv')
+            if return_fold_results:
+                fold_results.append(result)
             if i==0:
                 total_result = result
             else:
@@ -523,6 +533,8 @@ class Pipeline():
                     f'{self.config["result_dir"]}/{self.config["exp_id"]}.csv')
 
         print('test finished...')
+        if return_fold_results:
+            return mean_result, fold_results
         return mean_result
 
 

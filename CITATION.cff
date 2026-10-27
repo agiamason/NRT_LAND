@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: 'NRT_LAND: code for "Machine learning emulators of dynamic global vegetation models for fast gridded carbon budget predictions"'
+abstract: "Code to train and run the convolutional neural network emulators of the TRENDY dynamic global vegetation models, to prepare their inputs and to produce the figures and tables of the paper."
+authors:
+  - family-names: Ke
+    given-names: Piyu
+    affiliation: "Laboratoire des Sciences du Climat et de l'Environnement"
+  - family-names: Gui
+    given-names: Xiaofan
+    affiliation: Microsoft Research Asia
+  - family-names: Sitch
+    given-names: Stephen
+    affiliation: University of Exeter
+  - family-names: Liu
+    given-names: Zhu
+    affiliation: Tsinghua University
+  - family-names: Li
+    given-names: Xun
+    affiliation: Independent Researcher
+  - family-names: Bian
+    given-names: Jiang
+    affiliation: Microsoft Research Asia
+  - family-names: Friedlingstein
+    given-names: Pierre
+    affiliation: "University of Exeter; Laboratoire de Météorologie Dynamique"
+  - family-names: Ciais
+    given-names: Philippe
+    affiliation: "Laboratoire des Sciences du Climat et de l'Environnement"
+repository-code: "https://github.com/agiamason/NRT_LAND"
+keywords:
+  - net biome production
+  - machine learning emulator
+  - dynamic global vegetation models
+  - TRENDY
+  - Global Carbon Budget
