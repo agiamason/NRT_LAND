@@ -29,6 +29,7 @@ authors:
     given-names: Philippe
     affiliation: "Laboratoire des Sciences du Climat et de l'Environnement"
 repository-code: "https://github.com/agiamason/NRT_LAND"
+license: MIT
 keywords:
   - net biome production
   - machine learning emulator
