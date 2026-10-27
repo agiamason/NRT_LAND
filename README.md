@@ -399,3 +399,7 @@ analysis/                        Figures, tables and numbers of the paper
 install_dep_pkgs.sh              PyTorch and dependency installation
 requirements.txt                 Python dependencies other than PyTorch
 ```
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
