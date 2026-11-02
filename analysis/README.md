@@ -72,8 +72,9 @@ outside the event mask).
 
 `supp_fig10/` draws precipitation, fire emissions and vegetation carbon in the
 36 excluded cells: annual precipitation from ERA5, CRU TS 4.08 and CRU-JRA v2.3
-and v2.4, and fire emissions and vegetation carbon of LPX-Bern and LPJwsl /
-LPJ-EOSIM in TRENDY v11-v14.
+and v2.4, fire emissions of LPX-Bern and LPJwsl in TRENDY v11-v13, and
+vegetation carbon of LPX-Bern and LPJwsl in TRENDY v13 and v14 (LPJwsl is named
+LPJ-EOSIM in v14).
 
 ```bash
 # where the CRU-JRA half-degree forcing files are (v2.3/halfdeg, v2.4/halfdeg)

@@ -33,11 +33,17 @@ figures and tables (`analysis/`) and the construction of the input tables
 Each training sample is an `18 x 18` spatial patch with a temporal window.
 The model receives:
 
-1. four coordinate/time fields: `year`, `month`, `latitude`, and `longitude`;
-2. nine meteorological fields: `sp`, `ssrd`, `strd`, `t2m`, `tp`, `u10`, `v10`,
-   `q`, and `co2`;
+1. three coordinate/time fields, used as learned embeddings: `month`,
+   `latitude` and `longitude` (the `year` column is read with the table but is
+   not used by the network);
+2. eight ERA5 meteorological fields (`sp`, `ssrd`, `strd`, `t2m`, `tp`, `u10`,
+   `v10`, `q`) and atmospheric CO₂ (`co2`);
 3. the target's previous value as a history channel; and
 4. optional columns whose names contain `PFT`.
+
+`Net` also defines a year embedding (`year_em`) that is not used in `forward`
+and is therefore not trained; the 313,473 trained parameters per network
+reported in the paper (without PFT inputs) exclude it.
 
 During recursive evaluation, the target values in the requested prediction
 period are replaced month by month with the model prediction. The next month
@@ -51,8 +57,8 @@ mean of the five folds.
 Note on the learning rate: `run_epoch()` never calls `scheduler.step()`, so the
 learning rate stays at the start value of the warm-up scheduler,
 0.01 x 3.2e-3 = 3.2e-5 (AdamW, weight decay 1e-3), for the whole training. The
-published checkpoints were trained this way, and the code is kept unchanged so
-that retraining reproduces them.
+checkpoints used in the paper were trained this way, and the code is kept
+unchanged so that retraining reproduces them.
 
 ## Requirements
 
