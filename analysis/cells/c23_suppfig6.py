@@ -45,7 +45,7 @@ for i, dgvm_name in enumerate(selected_models):
         if l_min < col_lims[j]['min']: col_lims[j]['min'] = l_min
         if l_max > col_lims[j]['max']: col_lims[j]['max'] = l_max
         hb = ax.hexbin(x, y, gridsize=100, bins='log', cmap=strict_purple_cmap, mincnt=1, linewidths=0.2)
-        if i == 0 and j == 0: hb_list.append(hb)
+        hb_list.append((hb, len(x)))
         slope, intercept, r_value, p_value, std_err = linregress(x, y)
         rmse = np.sqrt(np.mean((x - y)**2))
         r2 = r_value**2
@@ -78,9 +78,10 @@ for j in range(2):
             ax.set_xlabel(f"Model {unit_mon}", fontsize=FS_SMALL)
 
 fig.align_ylabels(axes[:, 0])
-cbar = fig.colorbar(hb_list[0], ax=axes, orientation='horizontal', fraction=0.03, pad=0.06, aspect=25, shrink=0.6)
+cbar = fig.colorbar(hb_list[0][0], ax=axes, orientation='horizontal', fraction=0.03, pad=0.06, aspect=25, shrink=0.6)
 cbar.set_label('Data density (log scale)', fontsize=FS)
 cbar.ax.tick_params(labelsize=FS_TICK, width=LW_AX)
 cbar.outline.set_linewidth(LW_AX)
-save_fig(fig, 'SuppFig6', width_mm=89, fit_panels=True)
+save_fig(fig, 'SuppFig6', width_mm=89, fit_panels=True,
+         finalize=lambda: fraction_hexbin_colors(hb_list, cbar))
 plt.show()

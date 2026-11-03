@@ -44,6 +44,14 @@ def clim_ref(da):
 def seasonal_cycle_test(da):
     return da.sel(time=TEST_SLICE).groupby('time.month').mean('time')
 
+def calendar_quarter_mean(anomaly):
+    """Mean monthly anomalies in complete Jan-Mar, Apr-Jun, Jul-Sep and Oct-Dec quarters."""
+    months = pd.DatetimeIndex(anomaly.time.values).to_period('M')
+    counts = pd.Series(1, index=months.to_timestamp()).resample('QS-JAN').sum()
+    if months.has_duplicates or not (counts == 3).all():
+        raise ValueError('Quarterly anomalies require three distinct months in every calendar quarter')
+    return anomaly.resample(time='QS-JAN').mean()
+
 # ---- statistics: R2 = squared Pearson correlation; R2_SSE = 1 - SSE/SST ----
 def pearson_r2(x, y):
     x = np.asarray(x, dtype=float).ravel(); y = np.asarray(y, dtype=float).ravel()
@@ -114,7 +122,7 @@ def _spare(fig):
     sh = float(np.mean([(a.height - b.height) * H for a, b in zip(o, p)]))
     return sw, sh, len({round(a.y0, 3) for a in o}), len({round(a.x0, 3) for a in o})
 
-def save_fig(fig, name, width_mm=183, max_h_mm=170, fit_panels=False, **kw):
+def save_fig(fig, name, width_mm=183, max_h_mm=170, fit_panels=False, finalize=None, **kw):
     # Font sizes are fixed in pt, so the canvas (not the text) is resized until the cropped export is
     # width_mm wide and at most max_h_mm high. fit_panels=True (square scatter / Q-Q panels): the height is
     # also set so the square panels fill the frame instead of leaving white gaps; if that would exceed
@@ -161,7 +169,25 @@ def save_fig(fig, name, width_mm=183, max_h_mm=170, fit_panels=False, **kw):
             break
         W, H = fig.get_size_inches()
         fig.set_size_inches(W + dw * MM, H + dh * MM, forward=False)
-    fig.savefig(OUT_DIR + name + '.pdf', **kw)
+    if finalize is not None:
+        # Freeze the original count-colour layout/crop before changing colours and the colour-bar label.
+        # In particular, logarithmic fraction ticks must not resize constrained-layout panels or the PNG.
+        original_dpi = fig.dpi
+        fig.set_layout_engine(None)
+        fig.set_dpi(600)
+        fig.canvas.draw()
+        export_bbox = fig.get_tightbbox(fig.canvas.get_renderer()).padded(pad)
+        finalize()
+        fixed_kw = dict(kw, bbox_inches=export_bbox, pad_inches=0)
+        fig.savefig(OUT_DIR + name + '.png', dpi=600, **fixed_kw)
+        with open(OUT_DIR + name + '.png', 'rb') as fh:
+            final_size = struct.unpack('>II', fh.read(24)[16:24])
+        if final_size != (w_px, h_px):
+            raise ValueError(f'{name}: colour finalization changed PNG size: {(w_px, h_px)} to {final_size}')
+        fig.savefig(OUT_DIR + name + '.pdf', **fixed_kw)
+        fig.set_dpi(original_dpi)
+    else:
+        fig.savefig(OUT_DIR + name + '.pdf', **kw)
     print(f'Saved {OUT_DIR}{name}.png and .pdf ({w_mm:.1f} mm x {h_mm:.1f} mm)')
 
 apply_style()

@@ -36,3 +36,14 @@ def scatter_component_pairs(dgvm_name):
     x4 = anom_model.values.flatten()
     y4 = anom_cnn.values.flatten()
     return [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
+
+
+def fraction_hexbin_colors(hb_list, cbar):
+    # Count/N is exactly a weight of 1/N per sample, preserving mincnt=1 and blank empty bins.
+    fractions = [hb.get_array() / n for hb, n in hb_list]
+    norm = mcolors.LogNorm(vmin=min(float(f.min()) for f in fractions),
+                          vmax=max(float(f.max()) for f in fractions))
+    for (hb, n), fraction in zip(hb_list, fractions):
+        hb.set_array(fraction)
+        hb.set_norm(norm)
+    cbar.set_label('Fraction of samples per bin', fontsize=FS)

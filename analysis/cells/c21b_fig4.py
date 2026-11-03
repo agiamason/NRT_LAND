@@ -22,7 +22,7 @@ for i, dgvm_name in enumerate(selected_models):
         if l_min < col_lims[j]['min']: col_lims[j]['min'] = l_min
         if l_max > col_lims[j]['max']: col_lims[j]['max'] = l_max
         hb = ax.hexbin(x, y, gridsize=100, bins='log', cmap=strict_purple_cmap, mincnt=1, linewidths=0.2)
-        if i == 0 and j == 0: hb_list.append(hb)
+        hb_list.append((hb, len(x)))
         slope, intercept, r_value, p_value, std_err = linregress(x, y)
         rmse = np.sqrt(np.mean((x - y)**2))
         r2 = r_value**2
@@ -62,5 +62,6 @@ cbar = fig.colorbar(hb, ax=axes, orientation='horizontal', fraction=0.029, pad=0
 cbar.set_label('Data density (log scale)', fontsize=FS)
 cbar.ax.tick_params(labelsize=FS_TICK, width=LW_AX)
 cbar.outline.set_linewidth(LW_AX)
-save_fig(fig, 'Fig4', fit_panels=True)
+save_fig(fig, 'Fig4', fit_panels=True,
+         finalize=lambda: fraction_hexbin_colors(hb_list, cbar))
 plt.show()

@@ -64,10 +64,8 @@ def rmse(a, b): return float(np.sqrt(np.mean((np.asarray(b) - np.asarray(a)) ** 
 def ann(s): return np.asarray(s).reshape(14, 12).sum(1)                       # 2010..2023
 def own_anom(s): s = np.asarray(s); c = s[:144].reshape(12, 12).mean(0); return s - np.tile(c, 14)
 def sc_test(s): return np.asarray(s)[144:].reshape(2, 12).mean(0)             # 2022-2023 mean seasonal cycle
-def q_anom(s):                                                               # Fig 3 quarterly anomalies (QS-DEC), 8 values
-    da = xr.DataArray(np.asarray(s), coords={'time': model_results[NAMES[0]].time.values}, dims='time')
-    q = da.resample(time='QS-DEC').mean()
-    return (q.sel(time=TEST_SLICE).groupby('time.season') - q.sel(time=REF_SLICE).groupby('time.season').mean('time')).values
+def q_anom(s):                                                               # eight complete calendar quarters, 2022-2023
+    return own_anom(s)[144:].reshape(8, 3).mean(1)
 
 # ================= Part 1: emulator error vs inter-model spread (global) =================
 rows = []

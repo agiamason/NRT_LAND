@@ -16,6 +16,7 @@ si_models = [m for m in all_models_list if m not in fig1_models]
 fig = plt.figure(figsize=(FIG_W2, FIG_W2 * 17 / 20))
 outer_gs = gridspec.GridSpec(6, 3, figure=fig, wspace=0.22, hspace=0.42)
 
+r2_labels = []
 for i, dgvm_name in enumerate(si_models):
     cell = outer_gs[i]
     inner_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=cell, width_ratios=[2.3, 1], wspace=0.45)
@@ -39,7 +40,9 @@ for i, dgvm_name in enumerate(si_models):
     mask_test = t_plot >= split_date
     y_orig_test = y_orig[mask_test]
     y_emu_test = y_emu[mask_test]
+    # Same unrounded statistic as Supp Table 5; never round the four-decimal CSV again.
     r2 = pearson_r2(y_orig_test, y_emu_test)
+    r2_labels.append({'Model': disp(dgvm_name), 'R2_unrounded': r2, 'R2_label': f'{r2:.3f}'})
     rmse = np.sqrt(np.mean((y_orig_test - y_emu_test)**2))
     stats_line = f"$R^2$={r2:.3f}  RMSE={rmse:.2f}"
 
@@ -91,5 +94,6 @@ bar_emu = mpatches.Patch(color=COLOR_EMU, alpha=0.9, label='Emulator (annual)')
 fig.legend(handles=[line_org, line_emu, bar_org, bar_emu], loc='lower center',
            bbox_to_anchor=(0.5, 0.001), ncol=4, fontsize=FS, frameon=False)
 plt.subplots_adjust(top=0.96, bottom=0.07, left=0.07, right=0.98)
+pd.DataFrame(r2_labels).to_csv(OUT_DIR + 'SuppFig1_R2_labels.csv', index=False, float_format='%.17g')
 save_fig(fig, 'SuppFig1')
 plt.show()

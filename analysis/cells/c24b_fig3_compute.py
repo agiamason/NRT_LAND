@@ -32,22 +32,17 @@ for name in models_to_process:
     clim_cnn = dc.sel(time=REF_SLICE).groupby('time.month').mean('time')
     m4 = calc_pixel_wise_metrics(calculate_anomaly(dm.sel(time=TEST_SLICE), clim_model),
                                  calculate_anomaly(dc.sel(time=TEST_SLICE), clim_cnn))
-    # [Col 5] Quarterly anomalies
-    dm_q = dm.resample(time='QS-DEC').mean()
-    dc_q = dc.resample(time='QS-DEC').mean()
-    clim_model_q = dm_q.sel(time=REF_SLICE).groupby('time.season').mean('time')
-    clim_cnn_q = dc_q.sel(time=REF_SLICE).groupby('time.season').mean('time')
-    m5 = calc_pixel_wise_metrics(dm_q.sel(time=TEST_SLICE).groupby('time.season') - clim_model_q,
-                                 dc_q.sel(time=TEST_SLICE).groupby('time.season') - clim_cnn_q)
+    # [Col 5] Calendar-quarter means of the same monthly anomalies as Col 4
+    m5 = calc_pixel_wise_metrics(calendar_quarter_mean(calculate_anomaly(dm.sel(time=TEST_SLICE), clim_model)),
+                                 calendar_quarter_mean(calculate_anomaly(dc.sel(time=TEST_SLICE), clim_cnn)))
     metrics_data.append([m1['r2_mean'], s2['r2'], m3['r2_mean'], m4['r2_mean'], m5['r2_mean'],
                          m1['rmse_median'], s2['rmse'], m3['rmse_median'], m4['rmse_median'], m5['rmse_median']])
     # global scale (global totals, GtC month-1)
     gm, gc = cal_mon(raw_m), cal_mon(raw_c)
     gmt, gct = gm.sel(time=TEST_SLICE), gc.sel(time=TEST_SLICE)
     gcm, gcc = gm.sel(time=REF_SLICE).groupby('time.month').mean('time'), gc.sel(time=REF_SLICE).groupby('time.month').mean('time')
-    gm_q, gc_q = gm.resample(time='QS-DEC').mean(), gc.resample(time='QS-DEC').mean()
-    gqa_m = gm_q.sel(time=TEST_SLICE).groupby('time.season') - gm_q.sel(time=REF_SLICE).groupby('time.season').mean('time')
-    gqa_c = gc_q.sel(time=TEST_SLICE).groupby('time.season') - gc_q.sel(time=REF_SLICE).groupby('time.season').mean('time')
+    gqa_m = calendar_quarter_mean(calculate_anomaly(gmt, gcm))
+    gqa_c = calendar_quarter_mean(calculate_anomaly(gct, gcc))
     scale_rows.append({
         'Model': disp(name),
         'MonthlyNBP_grid_median': m1['r2_median'], 'MonthlyNBP_grid_pooled': m1['r2_pooled'],
