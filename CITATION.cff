@@ -36,3 +36,30 @@ keywords:
   - dynamic global vegetation models
   - TRENDY
   - Global Carbon Budget
+preferred-citation:
+  type: article
+  title: "Machine learning emulators of dynamic global vegetation models for fast gridded carbon budget predictions"
+  authors:
+    - family-names: Ke
+      given-names: Piyu
+    - family-names: Gui
+      given-names: Xiaofan
+    - family-names: Sitch
+      given-names: Stephen
+    - family-names: Liu
+      given-names: Zhu
+    - family-names: Li
+      given-names: Xun
+    - family-names: Bian
+      given-names: Jiang
+    - family-names: Friedlingstein
+      given-names: Pierre
+    - family-names: Ciais
+      given-names: Philippe
+  year: 2026
+  journal: "arXiv preprint"
+  identifiers:
+    - type: other
+      value: "arXiv:2611.04536"
+  doi: "10.48550/arXiv.2611.04536"
+  url: "https://arxiv.org/abs/2611.04536"
